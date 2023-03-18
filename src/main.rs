@@ -52,7 +52,7 @@ fn generate_proof(merkle_tree: &HashMap<String, u64>, data: &str) -> Vec<u64> {
     let mut current_hash = hash(data);
     let mut level = 1;
 
-    while let Some(&parent_hash) = merkle_tree.values().find(|&&hash| hash == current_hash) {
+    while merkle_tree.len() > 1 {
         let left_key = format!("L{}-{}", level, current_hash);
         let right_key = format!("L{}-{}-{}", level - 1, current_hash, current_hash);
 
@@ -60,9 +60,17 @@ fn generate_proof(merkle_tree: &HashMap<String, u64>, data: &str) -> Vec<u64> {
             proof.push(sibling_hash);
         } else if let Some(&sibling_hash) = merkle_tree.get(&right_key) {
             proof.push(sibling_hash);
+        } else {
+            break;
         }
 
-        current_hash = parent_hash;
+        let parent_key = format!("L{}-{}-{}", level + 1, current_hash, proof.last().unwrap());
+        if let Some(&parent_hash) = merkle_tree.get(&parent_key) {
+            current_hash = parent_hash;
+        } else {
+            break;
+        }
+
         level += 1;
     }
 
@@ -84,12 +92,13 @@ fn verify_proof(proof: &[u64], root_hash: u64, data: &str) -> bool {
 fn main() {
     let data = vec!["A", "B", "C", "D"];
     let merkle_tree = create_merkle_tree(&data);
-    let root_hash = merkle_tree.values().next().unwrap().clone();
+    let root_hash = *merkle_tree.values().max().unwrap();
 
     // Generate proof for the data item "C"
     let proof = generate_proof(&merkle_tree, "C");
 
     // Verify the proof for the data item "C"
     let is_valid = verify_proof(&proof, root_hash, "C");
-    println!("Proof is valid: {:?}", is_valid);
+
+    println!("Proof is valid: {}", is_valid);
 }
