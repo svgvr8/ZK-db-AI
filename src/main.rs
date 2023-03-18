@@ -1,67 +1,56 @@
-// Import diesel and dotenv
-use diesel::prelude::*;
-use diesel::sqlite::SqliteConnection;
-use dotenv::dotenv;
+use std::collections::HashMap;
 
-// Import zk-SNARK libraries and data structures
-use bellman::{Circuit, ConstraintSystem, SynthesisError};
-use pairing::{Engine, Field};
-use pairing::bls12_381::{Bls12, Fr};
-use bellman::groth16::{generate_random_parameters, prepare_verifying_key, create_random_proof, verify_proof};
-use pairing::{PrimeField, PrimeFieldRepr};
-use rand::thread_rng;
+type Scalar = i64;
+type Point = i64;
 
-// ZkDbCircuit definition
-struct ZkDbCircuit<E: Engine> {
-    value: Option<E::Fr>,
-}
+const G: Point = 2;
+const P: Scalar = 101;
 
-impl<E: Engine> Circuit<E> for ZkDbCircuit<E> {
-    fn synthesize<CS: ConstraintSystem<E>>(self, cs: &mut CS) -> Result<(), SynthesisError> {
-        let value_var = cs.alloc(|| "value", || self.value.ok_or(SynthesisError::AssignmentMissing))?;
-        cs.enforce(
-            || "value constraint",
-            |lc| lc + value_var,
-            |lc| lc + CS::one(),
-            |lc| lc + value_var,
-        );
-        Ok(())
+fn mod_exp(base: Scalar, exponent: Scalar, modulus: Scalar) -> Scalar {
+    let mut result = 1;
+    let mut base = base % modulus;
+    let mut exponent = exponent;
+
+    while exponent > 0 {
+        if exponent % 2 == 1 {
+            result = (result * base) % modulus;
+        }
+        exponent >>= 1;
+        base = (base * base) % modulus;
     }
+
+    result
 }
 
-// Establish a connection to the SQLite database
-fn establish_connection() -> SqliteConnection {
-    dotenv().ok();
+fn add_points(a: Point, b: Point) -> Point {
+    (a + b) % P
+}
 
-    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    SqliteConnection::establish(&database_url).unwrap_or_else(|_| panic!("Error connecting to {}", database_url))
+fn scalar_multiply(point: Point, scalar: Scalar) -> Point {
+    mod_exp(point, scalar, P)
 }
 
 fn main() {
-    let rng = &mut thread_rng();
+    // Prover's secret value (x) and public value (X = g^x)
+    let secret_value = 12;
+    let public_value = scalar_multiply(G, secret_value);
 
-    // Set up a basic ZK circuit
-    let circuit = ZkDbCircuit { value: None };
+    // Prover generates a random value (r) and computes the commitment (C = g^r)
+    let r = 5;
+    let commitment = scalar_multiply(G, r);
 
-    // Generate proving and verifying keys
-    let params = generate_random_parameters::<Bls12, _, _>(circuit, rng).unwrap();
-    let pvk = prepare_verifying_key(&params.vk);
+    // Verifier generates a random challenge (e)
+    let challenge = 7;
 
-    // Simulate a database query with a specific value
-    let value_repr = Fr::from_str("42").unwrap().into_repr();
-    let mut value = Fr::zero();
-    value.set_from_repr(value_repr).unwrap();
+    // Prover computes the response (z = r + e * x) modulo P-1
+    let response = (r + challenge * secret_value) % (P - 1);
 
-    // Generate a proof for the given value
-    let circuit_with_value = ZkDbCircuit { value: Some(value) };
-    let proof = create_random_proof(circuit_with_value, &params, rng).unwrap();
+    // Verifier computes g^z and X^e * C
+    let g_z = scalar_multiply(G, response);
+    let x_e_c = add_points(scalar_multiply(public_value, challenge), commitment);
 
-    // Verify the proof to ensure the query was valid
-    let is_valid_proof = verify_proof(&pvk, &proof, &[]).unwrap();
-    println!("Is the proof valid? {:?}", is_valid_proof);
+    // If g^z == X^e * C, the proof is valid
+    let proof_valid = g_z == x_e_c;
 
-    // Connect to the SQLite database
-    let conn = establish_connection();
-
-    // Perform database operations while preserving privacy using the ZK layer
+    println!("Proof is valid: {}", proof_valid);
 }
