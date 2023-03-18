@@ -1,56 +1,95 @@
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 
-type Scalar = i64;
-type Point = i64;
+// Hash function
+fn hash(data: &str) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    data.hash(&mut hasher);
+    hasher.finish()
+}
 
-const G: Point = 2;
-const P: Scalar = 101;
+// Create a Merkle tree from a vector of data
+fn create_merkle_tree(data: &[&str]) -> HashMap<String, u64> {
+    let mut merkle_tree = HashMap::new();
+    let mut current_level = Vec::new();
 
-fn mod_exp(base: Scalar, exponent: Scalar, modulus: Scalar) -> Scalar {
-    let mut result = 1;
-    let mut base = base % modulus;
-    let mut exponent = exponent;
-
-    while exponent > 0 {
-        if exponent % 2 == 1 {
-            result = (result * base) % modulus;
-        }
-        exponent >>= 1;
-        base = (base * base) % modulus;
+    for item in data {
+        let hash_value = hash(item);
+        let key = format!("L1-{}", item);
+        merkle_tree.insert(key, hash_value);
+        current_level.push(hash_value);
     }
 
-    result
+    let mut level = 2;
+    while current_level.len() > 1 {
+        let mut next_level = Vec::new();
+
+        for i in (0..current_level.len()).step_by(2) {
+            let left = current_level[i];
+            let right = if i + 1 < current_level.len() {
+                current_level[i + 1]
+            } else {
+                left
+            };
+
+            let combined = format!("{}{}", left, right);
+            let hash_value = hash(&combined);
+            let key = format!("L{}-{}-{}", level, left, right);
+            merkle_tree.insert(key, hash_value);
+            next_level.push(hash_value);
+        }
+
+        current_level = next_level;
+        level += 1;
+    }
+
+    merkle_tree
 }
 
-fn add_points(a: Point, b: Point) -> Point {
-    (a + b) % P
+// Generate the proof
+fn generate_proof(merkle_tree: &HashMap<String, u64>, data: &str) -> Vec<u64> {
+    let mut proof = Vec::new();
+    let mut current_hash = hash(data);
+    let mut level = 1;
+
+    while let Some(&parent_hash) = merkle_tree.values().find(|&&hash| hash == current_hash) {
+        let left_key = format!("L{}-{}", level, current_hash);
+        let right_key = format!("L{}-{}-{}", level - 1, current_hash, current_hash);
+
+        if let Some(&sibling_hash) = merkle_tree.get(&left_key) {
+            proof.push(sibling_hash);
+        } else if let Some(&sibling_hash) = merkle_tree.get(&right_key) {
+            proof.push(sibling_hash);
+        }
+
+        current_hash = parent_hash;
+        level += 1;
+    }
+
+    proof
 }
 
-fn scalar_multiply(point: Point, scalar: Scalar) -> Point {
-    mod_exp(point, scalar, P)
+// Verify the proof
+fn verify_proof(proof: &[u64], root_hash: u64, data: &str) -> bool {
+    let mut current_hash = hash(data);
+
+    for sibling_hash in proof {
+        let combined = format!("{}{}", current_hash, sibling_hash);
+        current_hash = hash(&combined);
+    }
+
+    current_hash == root_hash
 }
 
 fn main() {
-    // Prover's secret value (x) and public value (X = g^x)
-    let secret_value = 12;
-    let public_value = scalar_multiply(G, secret_value);
+    let data = vec!["A", "B", "C", "D"];
+    let merkle_tree = create_merkle_tree(&data);
+    let root_hash = merkle_tree.values().next().unwrap().clone();
 
-    // Prover generates a random value (r) and computes the commitment (C = g^r)
-    let r = 5;
-    let commitment = scalar_multiply(G, r);
+    // Generate proof for the data item "C"
+    let proof = generate_proof(&merkle_tree, "C");
 
-    // Verifier generates a random challenge (e)
-    let challenge = 7;
-
-    // Prover computes the response (z = r + e * x) modulo P-1
-    let response = (r + challenge * secret_value) % (P - 1);
-
-    // Verifier computes g^z and X^e * C
-    let g_z = scalar_multiply(G, response);
-    let x_e_c = add_points(scalar_multiply(public_value, challenge), commitment);
-
-    // If g^z == X^e * C, the proof is valid
-    let proof_valid = g_z == x_e_c;
-
-    println!("Proof is valid: {}", proof_valid);
+    // Verify the proof for the data item "C"
+    let is_valid = verify_proof(&proof, root_hash, "C");
+    println!("Proof is valid: {:?}", is_valid);
 }
